@@ -33,6 +33,7 @@ char *strnstr(const char *s, const char *find, size_t slen)
 
 void dump(unsigned char *buf, int size) {
 	int i;
+	printf("\n");
 	for (i = 0; i < size; i++) {
 		if (i != 0 && i % 16 == 0)
 			printf("\n");
