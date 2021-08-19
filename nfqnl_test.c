@@ -5,34 +5,33 @@
 #include <linux/types.h>
 #include <linux/netfilter.h>		/* for NF_ACCEPT */
 #include <errno.h>
-#include <libnet.h>
-#include <string.h>
 
 #include <libnetfilter_queue/libnetfilter_queue.h>
+#include <libnet.h>
+#include <string.h>
+#include <stdbool.h>
 
-char* htodrop;
-int drop = 0;
+char *strnstr(const char *s, const char *find, size_t slen)
+{
+	char c, sc;
+	size_t len;
 
-char* strnstr(unsigned char* packet, unsigned char* host, size_t len) {
-	size_t	i;
-
-	if (host[0] == '\0')
-		return ((char *)packet);
-	while (*packet != '\0' && len-- > 0)
-	{
-		i = 0;
-		while (*(packet + i) == *(host + i) && i < len)
-		{
-			i++;
-			if (*(host + i) == '\0')
-				return ((char *)packet);
-		}
-		packet++;
+	if ((c = *find++) != '\0') {
+		len = strlen(find);
+		do {
+			do {
+				if (slen-- < 1 || (sc = *s++) == '\0')
+					return (NULL);
+			} while (sc != c);
+			if (len > slen)
+				return (NULL);
+		} while (strncmp(s, find, len) != 0);
+		s--;
 	}
-	return (0);
+	return ((char *)s);
 }
 
-void dump(unsigned char* buf, int size) {
+void dump(unsigned char *buf, int size) {
 	int i;
 	for (i = 0; i < size; i++) {
 		if (i != 0 && i % 16 == 0)
@@ -41,6 +40,9 @@ void dump(unsigned char* buf, int size) {
 	}
 	printf("\n");
 }
+
+bool checker = true;
+char *black_site;
 
 /* returns packet id */
 static u_int32_t print_pkt (struct nfq_data *tb)
@@ -93,19 +95,17 @@ static u_int32_t print_pkt (struct nfq_data *tb)
         dump(data, ret);
 		printf("payload_len=%d\n", ret);
 
-        struct libnet_ipv4_hdr* iphdr;
-		struct libnet_tcp_hdr* tcphdr;
-		iphdr = (struct libnet_ipv4_hdr*) data;
-		tcphdr = (struct libnet_tcp_hdr*) (data + (iphdr->ip_hl) * 4);
-		if(iphdr->ip_p == 0x06 && ntohs(tcphdr->th_dport) == 80) {
-			char* http = (char*)(data + (iphdr->ip_hl) * 4 + (tcphdr->th_off) * 4);
-			if(strnstr(http, htodrop, strlen(http)))
-				drop = 1;
-			else
-				drop = 0;
-		}
-		else
-			drop = 0;
+        struct libnet_ipv4_hdr *ip_header = (struct libnet_ipv4_hdr *) data;
+        int ip_header_length = (ip_header->ip_hl) * 4;
+
+		struct libnet_tcp_hdr *tcp_header = (struct libnet_tcp_hdr *)(data + ip_header_length);
+        int tcp_header_length = (tcp_header->th_off) * 4;
+
+        if (ntohs(tcp_header->th_dport) == 80) {
+            char *http = (char *)(data + ip_header_length + tcp_header_length);
+            int http_packet_length = strlen(http);
+            checker = strnstr(http, black_site, http_packet_length) ? false : true;
+        }
 
 	fputc('\n', stdout);
 
@@ -119,13 +119,13 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 	u_int32_t id = print_pkt(nfa);
 	printf("entering callback\n");
 	
-    if(drop) {
-		printf("[PACKET DROPPED] %s\n", htodrop);
-		return nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
+    if(checker) {
+		printf("[NEFILTER ACCEPT]\n");
+		return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
 	}
 	else {
-		printf("[PACKET ACCEPTED]\n");
-		return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+        printf("[NEFILTER DROP]\n");
+		return nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
 	}
 }
 
@@ -138,7 +138,7 @@ int main(int argc, char **argv)
 	int rv;
 	char buf[4096] __attribute__ ((aligned));
 
-    htodrop = argv[1];
+    black_site = argv[1];
 
 	printf("opening library handle\n");
 	h = nfq_open();
@@ -172,7 +172,7 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	fd = nfq_fd(h);
+	fd = nfq_fd(h);:
 
 	for (;;) {
 		if ((rv = recv(fd, buf, sizeof(buf), 0)) >= 0) {
@@ -180,13 +180,7 @@ int main(int argc, char **argv)
 			nfq_handle_packet(h, buf, rv);
 			continue;
 		}
-		/* if your application is too slow to digest the packets that
-		 * are sent from kernel-space, the socket buffer that we use
-		 * to enqueue packets may fill up returning ENOBUFS. Depending
-		 * on your application, this error may be ignored. nfq_nlmsg_verdict_putPlease, see
-		 * the doxygen documentation of this library on how to improve
-		 * this situation.
-		 */
+
 		if (rv < 0 && errno == ENOBUFS) {
 			printf("losing packets!\n");
 			continue;
@@ -199,8 +193,6 @@ int main(int argc, char **argv)
 	nfq_destroy_queue(qh);
 
 #ifdef INSANE
-	/* normally, applications SHOULD NOT issue this command, since
-	 * it detaches other programs/sockets from AF_INET, too ! */
 	printf("unbinding from AF_INET\n");
 	nfq_unbind_pf(h, AF_INET);
 #endif
