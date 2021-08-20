@@ -104,7 +104,7 @@ static u_int32_t print_pkt (struct nfq_data *tb)
 
         if (ntohs(tcp_header->th_dport) == 80) {
             char *http = (char *)(data + ip_header_length + tcp_header_length);
-            int http_packet_length = strlen(http);
+            int http_packet_length = ntohs(ip_header->ip_len) - ip_header_length - tcp_header_length;
             checker = strnstr(http, black_site, http_packet_length) ? false : true;
         }
 
