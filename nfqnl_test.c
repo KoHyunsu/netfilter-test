@@ -173,7 +173,7 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	fd = nfq_fd(h);:
+	fd = nfq_fd(h);
 
 	for (;;) {
 		if ((rv = recv(fd, buf, sizeof(buf), 0)) >= 0) {
